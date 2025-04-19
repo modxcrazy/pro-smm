@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Services | SMM Panel</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link href="css/style.css" rel="stylesheet">
+  <link href="css/services.css" rel="stylesheet">
+</head>
+<body>
+  <div class="dashboard-container">
+    <!-- Sidebar (same as index.html) -->
+    <div class="sidebar">
+      <!-- Copy sidebar from index.html -->
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <header>
+        <div class="header-left">
+          <h3>Our Services</h3>
+        </div>
+        <div class="header-right">
+          <div class="user-profile">
+            <img id="userAvatar" src="assets/default-avatar.jpg" alt="User">
+            <span id="userName">Loading...</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Services Filter -->
+      <div class="services-filter">
+        <div class="search-box">
+          <input type="text" id="serviceSearch" placeholder="Search services...">
+          <i class="fas fa-search"></i>
+        </div>
+        <div class="category-filter">
+          <select id="categorySelect">
+            <option value="">All Categories</option>
+            <option value="instagram">Instagram</option>
+            <option value="youtube">YouTube</option>
+            <option value="twitter">Twitter</option>
+            <option value="facebook">Facebook</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Services Grid -->
+      <div class="services-grid" id="servicesContainer">
+        <!-- Services will be loaded here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Order Modal -->
+  <div id="orderModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h3>Place New Order</h3>
+      <form id="orderForm">
+        <input type="hidden" id="serviceId">
+        <div class="form-group">
+          <label>Service</label>
+          <input type="text" id="serviceName" readonly>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="serviceDescription" rows="3" readonly></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Price per 1000</label>
+            <input type="text" id="serviceRate" readonly>
+          </div>
+          <div class="form-group">
+            <label>Min - Max</label>
+            <input type="text" id="serviceLimits" readonly>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Quantity</label>
+          <input type="number" id="serviceQuantity" required>
+          <small id="quantityHelp" class="form-text"></small>
+        </div>
+        <div class="form-group">
+          <label>Link/Username</label>
+          <input type="text" id="serviceLink" placeholder="https://..." required>
+        </div>
+        <div class="form-group">
+          <label>Total Price</label>
+          <input type="text" id="totalPrice" readonly>
+        </div>
+        <button type="submit" class="btn btn-primary">Place Order</button>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { db, auth } from './js/firebase.js';
+    import { checkAdminStatus, formatCurrency } from './js/main.js';
+    
+    // Authentication check
+    auth.onAuthStateChanged(user => {
+      if (!user) {
+        window.location.href = 'auth.html';
+      } else {
+        document.getElementById('userName').textContent = user.displayName || user.email;
+        if (user.photoURL) {
+          document.getElementById('userAvatar').src = user.photoURL;
+        }
+        checkAdminStatus(user.uid);
+        loadServices();
+      }
+    });
+
+    // Logout functionality
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      auth.signOut().then(() => {
+        window.location.href = 'auth.html';
+      });
+    });
+
+    // Load services from Firestore
+    async function loadServices() {
+      const servicesContainer = document.getElementById('servicesContainer');
+      servicesContainer.innerHTML = '<div class="loading">Loading services...</div>';
+      
+      try {
+        const snapshot = await db.collection('services')
+          .where('status', '==', 'active')
+          .get();
+        
+        if (snapshot.empty) {
+          servicesContainer.innerHTML = '<div class="no-services">No services available at the moment.</div>';
+          return;
+        }
+        
+        servicesContainer.innerHTML = '';
+        
+        snapshot.forEach(doc => {
+          const service = doc.data();
+          const serviceCard = document.createElement('div');
+          serviceCard.className = 'service-card';
+          serviceCard.dataset.id = doc.id;
+          serviceCard.dataset.category = service.category;
+          
+          serviceCard.innerHTML = `
+            <div class="service-badge">${service.category}</div>
+            <h4>${service.name}</h4>
+            <p class="service-description">${service.description.substring(0, 100)}...</p>
+            <div class="service-meta">
+              <div class="service-rate">
+                <span>${formatCurrency(service.rate)}</span>
+                <small>per 1000</small>
+              </div>
+              <div class="service-limits">
+                <span>${service.min}-${service.max}</span>
+                <small>min-max</small>
+              </div>
+            </div>
+            <button class="btn btn-order">Order Now</button>
+          `;
+          
+          serviceCard.querySelector('.btn-order').addEventListener('click', () => {
+            openOrderModal(doc.id, service);
+          });
+          
+          servicesContainer.appendChild(serviceCard);
+        });
+        
+        // Initialize search and filter
+        initSearchAndFilter();
+      } catch (error) {
+        console.error("Error loading services:", error);
+        servicesContainer.innerHTML = '<div class="error">Failed to load services. Please try again.</div>';
+      }
+    }
+
+    // Initialize search and filter functionality
+    function initSearchAndFilter() {
+      const serviceSearch = document.getElementById('serviceSearch');
+      const categorySelect = document.getElementById('categorySelect');
+      const serviceCards = document.querySelectorAll('.service-card');
+      
+      function filterServices() {
+        const searchTerm = serviceSearch.value.toLowerCase();
+        const category = categorySelect.value;
+        
+        serviceCards.forEach(card => {
+          const matchesSearch = card.textContent.toLowerCase().includes(searchTerm);
+          const matchesCategory = !category || card.dataset.category === category;
+          
+          if (matchesSearch && matchesCategory) {
+            card.style.display = 'block';
+          } else {
+            card.style.display = 'none';
+          }
+        });
+      }
+      
+      serviceSearch.addEventListener('input', filterServices);
+      categorySelect.addEventListener('change', filterServices);
+    }
+
+    // Order modal functions
+    const orderModal = document.getElementById('orderModal');
+    
+    function openOrderModal(serviceId, service) {
+      document.getElementById('serviceId').value = serviceId;
+      document.getElementById('serviceName').value = service.name;
+      document.getElementById('serviceDescription').value = service.description;
+      document.getElementById('serviceRate').value = formatCurrency(service.rate);
+      document.getElementById('serviceLimits').value = `${service.min}-${service.max}`;
+      document.getElementById('serviceQuantity').min = service.min;
+      document.getElementById('serviceQuantity').max = service.max;
+      document.getElementById('serviceQuantity').value = service.min;
+      document.getElementById('quantityHelp').textContent = `Min: ${service.min}, Max: ${service.max}`;
+      updateTotalPrice(service.rate, service.min);
+      
+      // Show modal
+      orderModal.style.display = 'block';
+      
+      // Quantity change listener
+      document.getElementById('serviceQuantity').addEventListener('input', () => {
+        updateTotalPrice(service.rate, document.getElementById('serviceQuantity').value);
+      });
+    }
+    
+    function updateTotalPrice(rate, quantity) {
+      const total = (rate * quantity / 1000).toFixed(2);
+      document.getElementById('totalPrice').value = formatCurrency(total);
+    }
+    
+    // Close modal when clicking X
+    document.querySelector('#orderModal .close').addEventListener('click', () => {
+      orderModal.style.display = 'none';
+    });
+    
+    // Close modal when clicking outside
+    window.addEventListener('click', (event) => {
+      if (event.target === orderModal) {
+        orderModal.style.display = 'none';
+      }
+    });
+    
+    // Handle order form submission
+    document.getElementById('orderForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const userId = auth.currentUser.uid;
+      const serviceId = document.getElementById('serviceId').value;
+      const quantity = parseInt(document.getElementById('serviceQuantity').value);
+      const link = document.getElementById('serviceLink').value;
+      const rate = parseFloat(document.getElementById('serviceRate').value.replace(/[^0-9.]/g, ''));
+      const totalPrice = (rate * quantity / 1000).toFixed(2);
+      const serviceName = document.getElementById('serviceName').value;
+      
+      // Check user balance
+      const userDoc = await db.collection('users').doc(userId).get();
+      const userBalance = userDoc.data().balance || 0;
+      
+      if (userBalance < totalPrice) {
+        alert('Insufficient balance. Please add funds to your account.');
+        orderModal.style.display = 'none';
+        return;
+      }
+      
+      // Create order
+      try {
+        // Start transaction
+        await db.runTransaction(async (transaction) => {
+          // Deduct from user balance
+          transaction.update(db.collection('users').doc(userId), {
+            balance: firebase.firestore.FieldValue.increment(-totalPrice)
+          });
+          
+          // Create order document
+          const orderRef = db.collection('orders').doc();
+          transaction.set(orderRef, {
+            userId: userId,
+            serviceId: serviceId,
+            serviceName: serviceName,
+            quantity: quantity,
+            link: link,
+            price: parseFloat(totalPrice),
+            status: 'processing',
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          
+          // Add transaction record
+          transaction.set(db.collection('transactions').doc(), {
+            userId: userId,
+            amount: parseFloat(totalPrice),
+            type: 'order',
+            orderId: orderRef.id,
+            status: 'completed',
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+        
+        alert('Order placed successfully!');
+        orderModal.style.display = 'none';
+      } catch (error) {
+        console.error("Error placing order:", error);
+        alert('Failed to place order. Please try again.');
+      }
+    });
+  </script>
+</body>
+</html>
